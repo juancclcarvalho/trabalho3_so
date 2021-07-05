@@ -10,15 +10,6 @@
 #define ERROR_MSG(m)
 #endif
 
-/*
-    TODO: void fs init(void);
-    Essa funcao inicializa as estruturas de dados e os recursos usados pelo subsistema
-    do sistema de arquivos e, se detectar que o disco ja esta formatado, faz sua montagem automaticamente
-    no diretorio raiz. Ela eh chamada no momento da inicializacao do sistema, mas antes do modulo de bloco
-    (block.c) ser inicializado. Entao, voce precisa chamar block init em fs init. Observe que no momento
-    em que fs init eh chamada, o disco nao esta necessariamente formatado. Como resultado, voce precisa criar
-    um mecanismo para que um disco formatado seja reconhecido (consulte fs mkfs).
-*/
 void create_inode(inode_t* inode, int number)
 {
     inode->inodeNo = number;
@@ -32,6 +23,15 @@ void create_inode(inode_t* inode, int number)
 
 void fs_init( void) 
 {
+    /*
+        TODO: void fs init(void);
+        Essa funcao inicializa as estruturas de dados e os recursos usados pelo subsistema
+        do sistema de arquivos e, se detectar que o disco ja esta formatado, faz sua montagem automaticamente
+        no diretorio raiz. Ela eh chamada no momento da inicializacao do sistema, mas antes do modulo de bloco
+        (block.c) ser inicializado. Entao, voce precisa chamar block init em fs init. Observe que no momento
+        em que fs init eh chamada, o disco nao esta necessariamente formatado. Como resultado, voce precisa criar
+        um mecanismo para que um disco formatado seja reconhecido (consulte fs mkfs).
+    */
     block_init();
     
     char* aux;
@@ -186,11 +186,17 @@ inode_t* search_filename(char *fileName)
 
 inode_t* find_empty_inode()
 {
-    /**
-    *   TODO: 😎😎 ovo morre
-    *
-    */
+
+    for(int i = 2; i <= INODE_BLOCKS * 4; i++)
+    {
+        inode_t* inode = retrieve_inode(i);
+        if(inode->type == FREE_INODE)
+            return inode;
+    }
+
+    return NULL;
 }
+
 /*
     TODO: int fs open(char *filename, int flags);
     Dado um nome de arquivo (filename), fs open() 
@@ -231,6 +237,7 @@ int fs_open(char *fileName, int flags)
     // Se um arquivo inexistente for aberto para gravação, ele devera ser criado
     if(inode == NULL) 
     {
+        inode = retrieve_inode(PWD);
         int unusedBlockIndex = find_unused_block();
         int lastUsedIndex = inode->size;
         int fileNameSize = strlen(fileName);
@@ -246,6 +253,9 @@ int fs_open(char *fileName, int flags)
             inode->data[i] = fileName[fileNameIndex++];
         }
         inode_t* newNode = find_empty_inode();
+        if(newNode == NULL)
+            return -1;
+
         newNode->type = FILE_TYPE;
         newNode->links = 1;
         newNode->size = 0;
@@ -255,14 +265,16 @@ int fs_open(char *fileName, int flags)
 
         //convert newNode->inodeNo to char[4] and insert into inode->data[]
         char intToCharArray[4] = &newNode->inodeNo;
+        int charArrIndex = 0 ;
         
         lastUsedIndex = lastUsedIndex + fileNameSize;
         for(int i = lastUsedIndex; i < lastUsedIndex + sizeof(int)/* 4 */; i++)
-            inode->data[i] = fileName[fileNameIndex++];
+            inode->data[i] = intToCharArray[charArrIndex++];
 
         inode->numBlocks++;
         inode->size += fileNameSize + 4;
         mark_block_as_occupied(unusedBlockIndex);
+        inode = newNode;
     }
     // E considerado um erro abrir um diretório em qualquer modo alem do FS_O_RDONLY.
     if(inode->type == DIRECTORY && flags != FS_O_RDONLY)
@@ -274,6 +286,7 @@ int fs_open(char *fileName, int flags)
     // seta valores do file descriptor criado
     file_descriptor->seek_ptr = 0;
     file_descriptor->inode = inode;
+    file_descriptor->hasNoLinks = 0;
     // coloca o file descriptor na tabela de descritor, não precisamos se preocupar em sobrescrever outra tabela
     // foi estipulado na descrição que apenas um programa vai abrir o arquivo por vez
     file_table[inode->inodeNo] = file_descriptor;
@@ -290,17 +303,18 @@ int fs_close( int fd)
     *   descritor foi a ultima referencia a um arquivo que foi removido usando a desvinculacao (unlink)
     *   o arquivo sera excluıdo.
     */
-    int refs = file_table[fd]->inode->links;
-    if (refs == 1)
-    {
-        inode_t* inode = file_table[fd]->inode;
-        inode->type = FREE_INODE;
+    inode_t* inode = file_table[fd]->inode;
 
-    }
+    // o arquivo foi deletado, liberamos a memória associada a ele
+    if(file_table[fd]->hasNoLinks)
+        inode->type = FREE_INODE;
+        
+    block_write(inode->inodeNo + 1, inode);
     
+    free(file_table[fd]);
     file_table[fd] = NULL;
 
-    return -1;
+    return 0;
 }
 
 int find_unused_block()
@@ -435,11 +449,24 @@ int fs_write( int fd, char *buf, int count) {
     for(int i = startingBlock; i < lastBlock; i++)
     {
         int blockIndex;
+         char* aux;
+
+        // verifica se bloco ainda não foi alocado
+        if(startingBlock >= file_table[fd]->inode->numBlocks)
+        {
+            int unusedBlockIndex = find_unused_block();
+            mark_block_as_occupied(unusedBlockIndex);
+            char intToCharArray[4] = &unusedBlockIndex;
+        
+            for(int j = 0; j < 4 ; j++)
+                inode->data[(i*4) + j] = intToCharArray[j];
+            // não atualiza inode agora, apenas escreve quando fechar o file descriptor
+        }
+        
         //transforma char[4] pra int
         memcpy(&blockIndex, inode->data[i * 4], sizeof(int));
-
-        char* aux;
         block_read(blockIndex, aux);
+        
         int currentBlockCounter = 0;
         while(writtenByteCounter < count && currentBlockCounter < BLOCK_SIZE)
         {
@@ -480,9 +507,11 @@ int fs_lseek( int fd, int offset) {
     *   o arquivo será preenchido com ’\0’ no espaço intermediário.
     *   Após a conclusão bem-sucedida, fs lseek() retorna o local de deslocamento resultante conforme
     *   medido em bytes desde o início do arquivo. Caso contrário, o valor -1 será retornado.
-    *   ALGUEM: ME: DA: UM: TIRO:
     */
-    return -1;
+
+    file_table[fd]->seek_ptr += offset;
+    // TODO: ADICIONAR LOGICA DE PREENCHER '\0' NO ESPAÇO INTERMEDIARIO
+    return 0;
 }
 
 int fs_mkdir( char *fileName) {
@@ -492,7 +521,46 @@ int fs_mkdir( char *fileName) {
     *   sucesso ou -1 se ocorreu um erro. fs mkdir() deve falhar se o diretório dirname já existir.
     *   Novos diretórios devem conter entradas “.” e “..”. E um erro tentar criar um diretório sem eles.
     */
-    return -1;
+
+    inode_t* inode = retrieve_inode(PWD);
+    int unusedBlockIndex = find_unused_block();
+    int lastUsedIndex = inode->size;
+    int fileNameSize = strlen(fileName);
+
+    // fileName[fileNameIndex]
+    int fileNameIndex = 0;
+    for(int i = lastUsedIndex; i < lastUsedIndex + fileNameSize; i++)
+    {
+            // se i == 101, não vai caber
+        if(i == 101)
+            return -1;
+            
+        inode->data[i] = fileName[fileNameIndex++];
+    }
+    inode_t* newNode = find_empty_inode();
+    if(newNode == NULL)
+        return -1;
+
+    newNode->type = FILE_TYPE;
+    newNode->links = 1;
+    newNode->size = 0;
+    newNode->numBlocks = 0;
+    newNode->dot = newNode->inodeNo;
+    newNode->dotdot = inode->inodeNo;
+
+    //convert newNode->inodeNo to char[4] and insert into inode->data[]
+    char intToCharArray[4] = &newNode->inodeNo;
+    int charArrIndex = 0 ;
+        
+    lastUsedIndex = lastUsedIndex + fileNameSize;
+    for(int i = lastUsedIndex; i < lastUsedIndex + sizeof(int)/* 4 */; i++)
+        inode->data[i] = intToCharArray[charArrIndex++];
+
+    inode->numBlocks++;
+    inode->size += fileNameSize + 4;
+    mark_block_as_occupied(unusedBlockIndex);
+    
+    return 0;
 }
 
 int fs_rmdir( char *fileName) {
@@ -518,7 +586,9 @@ int fs_rmdir( char *fileName) {
     inode->type = FREE_INODE;
     /**
     *   TODO: ATUALIZAR INODE APONTADO POR PWD (precisa tirar o campo que apontava pro diretorio excluido)
+    *       No caso é só chamar unlink?????                     - sim.
     */
+    fs_unlink(inode->inodeNo);
     return 0;
 }
 
@@ -552,17 +622,15 @@ fs_link( char *old_fileName, char *new_fileName) {
     *   Observe que, como não existem “caminhos” além do diretório atual, o pai ou o diretório filho, oldpath
     *   e newpath são na verdade ambos nomes de arquivos e só podem estar no mesmo diretório
     */
+
+    inode_t* linkedInode = search_filename(old_fileName);
     return -1;
 }
 
-// link pra negocio
-// 
-// pastadonegocio
-// NEGOCIO
 
-int fs_unlink( char *fileName) {
+int fs_unlink(int inodeNo) {
     /**
-    *   TODO: int fs unlink(char *filename);
+    *   TODO: int fs unlink(int inodeNo);
     *   Descrição da função: fs unlink() exclui um nome do sistema de arquivos. Se esse nome foi o último
     *   link para um arquivo e nenhum processo o abriu, o arquivo será excluído e o espaço usado estará disponível
     *   para reutilização.
@@ -571,7 +639,65 @@ int fs_unlink( char *fileName) {
     *   Em caso de sucesso, zero é retornado. Em caso de erro, -1 é retornado. E um erro usar esta função em ´
     *   um diretório.
     */
-    return -1;
+    inode_t* inode = retrieve_inode(PWD);
+     
+    char newData[105];
+    int newDataIndex;
+
+    int numBlocks = inode->numBlocks;
+    int newNumBlocks = 0;
+    int blocksFound = 0;
+    
+    int referenceStart = 0;
+    int i = 0;
+
+    /* 
+        Laço vai iterando até achar um \0
+        achando um '\0', sabemos que os proximos 4 bytes representam numero do proximo inode
+    */
+    while(blocksFound < numBlocks)
+    {  
+        // acabou a string do nome do diretorio/arquivo
+        if(inode->data[i] == '\0')
+        {
+            blocksFound++;
+            int index;
+            // constroi int a partir do char[4]
+            memcpy(&index, inode->data[i+1], sizeof(int));
+            i += 4;
+            // se o proximo ponteiro não for correspondente ao numero do arquivo a ser excluido
+            if(index != inodeNo)
+            {
+                // incrementa a quantidade de blocos
+                newNumBlocks++;
+                for(int j = referenceStart; j <= i; j++)
+                    newData[newDataIndex++] = inode->data[j];
+                referenceStart = i + 1;
+            }
+        }
+        i++;
+    }
+
+    inode->numBlocks = newNumBlocks;
+    memcpy(inode->data, newData, 105);
+    // salva mudanças do diretório pai no disco
+    block_write(inode->inodeNo + 1, inode);
+
+
+    // se o usuário estiver com o arquivo aberto
+    // não podemos deletar o arquivo de fato ainda
+    // isso só vai ser feito quando o file descriptor for fechado
+    if(file_table[inodeNo] == NULL)
+    {
+        inode_t* deletedInode = retrieve_inode(inodeNo);
+        deletedInode->type = FREE_INODE;
+        block_write(inodeNo + 1, deletedInode);
+    }
+    else
+    {
+        file_table[inodeNo]->hasNoLinks = 1;
+    }
+    return 0;
 }
 
 int fs_stat( char *fileName, fileStat *buf) {

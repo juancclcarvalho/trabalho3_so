@@ -16,7 +16,7 @@ int fs_mkdir( char *fileName);
 int fs_rmdir( char *fileName);
 int fs_cd( char *dirName);
 int fs_link( char *old_fileName, char *new_fileName);
-int fs_unlink( char *fileName);
+int fs_unlink( int inodeNo);
 int fs_stat( char *fileName, fileStat *buf);
 
 
