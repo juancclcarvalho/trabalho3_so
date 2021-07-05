@@ -3,44 +3,63 @@
 #include "block.h"
 #include "fs.h"
 
+
 #ifdef FAKE
 #include <stdio.h>
 #define ERROR_MSG(m) printf m;
 #else
 #define ERROR_MSG(m)
 #endif
+/**
+    TODA VEZ QUE FOR GUARDAR UM INODE, TEM QUE SALVAR OS OUTROS NO BLOCO TAMBÉM
+    UM INODE FICA EM UM BLOCO COM OUTROS 3
+*/
 
-void create_inode(inode_t* inode, int number)
+inode_t* create_inode(int number)
 {
-    inode->inodeNo = number;
-    inode->type = FREE_INODE;  
-    inode->links = 0; 
-    inode->size = 0;  
-    inode->numBlocks = 0; 
-    inode->dot = number; 
-    inode->dotdot = number;
+    inode_t* newNode = (inode_t*) malloc(sizeof(inode_t));
+    newNode->inodeNo = number;
+    newNode->type = FREE_INODE;  
+    newNode->links = 0; 
+    newNode->size = 0;  
+    newNode->numBlocks = 0; 
+    newNode->dot = number; 
+    newNode->dotdot = number;
+
+    return newNode;
+}
+
+inode_t* retrieve_inode(int index)
+{
+    char* aux = (char*) malloc(BLOCK_SIZE);
+    block_read((index/4) + 1, aux); // lê bloco relacionado ao indice DO INODE (inode_t->inodeNo)
+    inode_t* inode = (inode_t*)&aux[(index % 4) * sizeof(inode_t)]; // busca inode correto dentro dos 4 inodes presentes do bloco
+    return inode;
+}
+
+void save_inode(inode_t* inode, int index)
+{
+    char* aux = (char*) malloc(BLOCK_SIZE);
+    block_read((index/4) + 1, aux); // lê bloco relacionado ao indice DO INODE (inode_t->inodeNo)
+    memcpy(&aux[(index % 4) * sizeof(inode_t)], inode, sizeof(inode_t));
+    block_write((index/4) + 1, aux);
 }
 
 void fs_init( void) 
 {
-    /*
-        TODO: void fs init(void);
-        Essa funcao inicializa as estruturas de dados e os recursos usados pelo subsistema
-        do sistema de arquivos e, se detectar que o disco ja esta formatado, faz sua montagem automaticamente
-        no diretorio raiz. Ela eh chamada no momento da inicializacao do sistema, mas antes do modulo de bloco
-        (block.c) ser inicializado. Entao, voce precisa chamar block init em fs init. Observe que no momento
-        em que fs init eh chamada, o disco nao esta necessariamente formatado. Como resultado, voce precisa criar
-        um mecanismo para que um disco formatado seja reconhecido (consulte fs mkfs).
-    */
     block_init();
-    
-    char* aux;
-    block_read(0, aux);
-    superblock = aux;
-    if(superblock->magic_number == MAGIC_NUMBER)
-        fs_mkfs(); // formata disco
+    char* aux = (char*)malloc(BLOCK_SIZE);
 
-    PWD = 1;
+    block_read(0, aux);
+    superblock = (superblock_t*)aux;
+    PWD = 0;
+    //printf("got %lld  ", superblock->magic_number);
+    if(superblock->magic_number != MAGIC_NUMBER)
+    {
+        superblock->magic_number = MAGIC_NUMBER;
+        block_write(0,(char*)superblock);
+        fs_mkfs(); // formata disco
+    }
 
     for (fd_t** ptr = file_table; ptr != file_table + 2044; ptr++)
         *ptr = NULL;
@@ -50,66 +69,61 @@ void fs_init( void)
 
 int fs_mkfs(void) 
 {
-    /**
-    *   TODO: int fs mkfs(void);
-    *   Esta funcao formata um disco: um disco bruto ou um que foi formatado anteriormente.
-    *   Em seguida, ela monta o sistema de arquivos recem-formatado no diretorio raiz. O tamanho do
-    *   disco (em blocos) eh definido como FS SIZE em fs.h. 
-    *   (Voce pode aumentar o tamanho do disco para teste, se desejar) 
-    *   Assumimos que existe um e apenas um disco presente no sistema. Voce precisa escrever um
-    *   numero magico no super bloco para que mais tarde possa ser reconhecido como um disco formatado 
-    *   (ou seja, voce ainda pode acessar um disco formatado e obter seu conteudo apos o interpretador de comandos
-    *   terminar e reiniciar). A funcao deve retornar 0 em caso de sucesso e -1 em caso de falha.
-    */
     char* aux;
+    
     int inode_counter = 0;
-    inode_t* inode[4] = (inode_t*) malloc(sizeof(inode_t) * 4);
- 
+    inode_t* inode[4];
+
     for(int i = 1; i <= INODE_BLOCKS; i++) // percorre todo os inodes do sistema de arquivos
     {
         // cria 4 inodes que preenchem o bloco
-        create_inode(inode[0], inode_counter++);
-        create_inode(inode[1], inode_counter++);   
-        create_inode(inode[2], inode_counter++);   
-        create_inode(inode[3], inode_counter++);
+        inode[0] = create_inode(inode_counter++);
+        inode[1] = create_inode(inode_counter++);   
+        inode[2] = create_inode(inode_counter++);   
+        inode[3] = create_inode(inode_counter++);
         // aux recebe os quatro inodes
-        aux = inode;
+        aux = (char*) malloc(BLOCK_SIZE);
+        
+        memcpy(&aux[sizeof(inode_t) * 0], inode[0], sizeof(inode_t));
+        memcpy(&aux[sizeof(inode_t) * 1], inode[1], sizeof(inode_t));
+        memcpy(&aux[sizeof(inode_t) * 2], inode[2], sizeof(inode_t));
+        memcpy(&aux[sizeof(inode_t) * 3], inode[3], sizeof(inode_t));
         // salvamos o bloco
         block_write(i,aux);
+        
     }
 
-    // aloca mapa de alocação 
+    // aloca mapa de alocação (bitmasks de blocos de dados)
     aux = (char*) malloc(BLOCK_SIZE);
     // preenche com zeros
     memset(aux, 0xFF, BLOCK_SIZE);
     // guarda no disco
     block_write(INODE_BLOCKS + 1, aux);
+    
+    inode_t* root = retrieve_inode(PWD);
+    root->type = DIRECTORY;
+    save_inode(root, 0);
 
     return 0;
 }
 
-
-inode_t* retrieve_inode(int index)
-{
-    char* aux;
-    block_read((index/4) + 1, aux); // lê bloco relacionado ao indice DO INODE (inode_t->inodeNo)
-    inode_t* inode = &aux[(index % 4) * sizeof(inode_t)]; // busca inode correto dentro dos 4 inodes presentes do bloco
-    return inode;
-}
-
 inode_t* search_filename(char *fileName)
 {
-    /**
-         TODO: TRATAR CASOS DE QUANDO |
-                                      |
-         FILENAME = "."       <-------|
-         FILENAME = ".."      <-------|
-    */
     inode_t* inode = retrieve_inode(PWD);
     int fileNameSize = strlen(fileName);
     
     if(inode->type == DIRECTORY)
     {
+        if(strcmp(fileName, ".") == 0)
+        {
+            inode_t* dot = retrieve_inode(inode->dot);
+            return dot; 
+        }
+        if(strcmp(fileName, "..") == 0)
+        {
+            inode_t* dotdot = retrieve_inode(inode->dotdot);
+            return dotdot; 
+        }
         // inode->data[dataIndex]
         int dataIndex = 0;
         // iteramos sob o campo data
@@ -151,7 +165,7 @@ inode_t* search_filename(char *fileName)
                         // deu bom
                         int index;
                         // constroi int a partir do char[4]
-                        memcpy(&index, inode->data[dataIndex + 1], sizeof(int));
+                        memcpy(&index, &inode->data[dataIndex + 1], sizeof(int));
                         inode_t* foundInode = retrieve_inode(index);
                         return foundInode;
                     }
@@ -178,16 +192,17 @@ inode_t* search_filename(char *fileName)
     }
     else
     {
+        printf("NOT A DIRECTORY, SOMEHOW\n");
         // função precisa buscar o arquivo dentro de um diretório.
         // idealmente PWD nunca apontará para um arquivo... eu sou burro
         return NULL;
     }
 }
 
-inode_t* find_empty_inode()
+inode_t* find_empty_inode() // SOLUÇÃO O(N) bem ruim mas dá pro gasto
 {
 
-    for(int i = 2; i <= INODE_BLOCKS * 4; i++)
+    for(int i = 1; i <= INODE_BLOCKS * 4; i++)
     {
         inode_t* inode = retrieve_inode(i);
         if(inode->type == FREE_INODE)
@@ -240,7 +255,7 @@ int fs_open(char *fileName, int flags)
         inode = retrieve_inode(PWD);
         int unusedBlockIndex = find_unused_block();
         int lastUsedIndex = inode->size;
-        int fileNameSize = strlen(fileName);
+        int fileNameSize = strlen(fileName) + 1;
 
         // fileName[fileNameIndex]
         int fileNameIndex = 0;
@@ -264,7 +279,7 @@ int fs_open(char *fileName, int flags)
         newNode->dotdot = inode->inodeNo;
 
         //convert newNode->inodeNo to char[4] and insert into inode->data[]
-        char intToCharArray[4] = &newNode->inodeNo;
+        char* intToCharArray = (char*)&newNode->inodeNo;
         int charArrIndex = 0 ;
         
         lastUsedIndex = lastUsedIndex + fileNameSize;
@@ -274,6 +289,8 @@ int fs_open(char *fileName, int flags)
         inode->numBlocks++;
         inode->size += fileNameSize + 4;
         mark_block_as_occupied(unusedBlockIndex);
+        save_inode(inode, inode->inodeNo);
+        save_inode(newNode, newNode->inodeNo);
         inode = newNode;
     }
     // E considerado um erro abrir um diretório em qualquer modo alem do FS_O_RDONLY.
@@ -303,14 +320,18 @@ int fs_close( int fd)
     *   descritor foi a ultima referencia a um arquivo que foi removido usando a desvinculacao (unlink)
     *   o arquivo sera excluıdo.
     */
+    if(file_table[fd] == NULL)
+        return -1;
+
     inode_t* inode = file_table[fd]->inode;
+    inode->links--;
 
     // o arquivo foi deletado, liberamos a memória associada a ele
     if(file_table[fd]->hasNoLinks)
         inode->type = FREE_INODE;
         
-    block_write(inode->inodeNo + 1, inode);
-    
+    save_inode(inode, inode->inodeNo);
+
     free(file_table[fd]);
     file_table[fd] = NULL;
 
@@ -319,7 +340,7 @@ int fs_close( int fd)
 
 int find_unused_block()
 {
-    char* aux;
+    char* aux = (char*) malloc(BLOCK_SIZE);
     block_read(INODE_BLOCKS + 1, aux);
     int firstDataBlockIndex = INODE_BLOCKS + 2;
 
@@ -343,7 +364,7 @@ int find_unused_block()
 
 void mark_block_as_occupied(int block)
 {
-    char* aux;
+    char* aux = (char*) malloc(BLOCK_SIZE);
     block_read(INODE_BLOCKS + 1, aux);
     int firstDataBlockIndex = INODE_BLOCKS + 2;
     block -= firstDataBlockIndex;
@@ -368,6 +389,7 @@ int fs_read( int fd, char *buf, int count) {
     *   por exemplo, porque menos bytes estao disponıveis no momento. Em caso de erro, -1 e retornado. No caso
     *   de erro, nao e necessario alterar ponteiro de deslocamento do arquivo.
     */
+    printf("reading %d bytes\n", count);
 
     // usuário pediu pra ler 0 bytes 😑
     if(count == 0) 
@@ -383,22 +405,22 @@ int fs_read( int fd, char *buf, int count) {
         return 0;
     // bytes disponiveis = tamanho arquivo - bytes já lidos
     int availableBytes = inode->size - file_table[fd]->seek_ptr;
-    int blocksNeeded = count/BLOCK_SIZE;
+    int blocksNeeded = (count / BLOCK_SIZE) + 1;
 
-    buf = (char*) malloc(count);
-    int readByteCounter = 0;
+    int readByteCounter = file_table[fd]->seek_ptr;
     for(int i = 0; i < blocksNeeded; i++)
     {
         int blockIndex;
         //transforma char[4] pra int
-        memcpy(&blockIndex, inode->data[i * 4], sizeof(int));
+        memcpy(&blockIndex, &inode->data[i * 4], sizeof(int));
 
-        char* aux;
+        char* aux = (char*) malloc(BLOCK_SIZE);
         block_read(blockIndex, aux);
         int currentByteCounter = 0;
         while(readByteCounter < count && currentByteCounter < BLOCK_SIZE)
         {
-            buf[readByteCounter++] = aux[currentByteCounter++];
+            printf("reading from pos %d from pos %d == %c\n", readByteCounter, currentByteCounter, aux[currentByteCounter]);
+            buf[readByteCounter++] = aux[currentByteCounter++];    
         }
     }
     // atualiza ponteiro do file descriptor
@@ -419,6 +441,7 @@ int fs_write( int fd, char *buf, int count) {
     *   Um arquivo de tamanho zero não deve ocupar nenhum bloco de dados.
     *   Se count for zero, 0 será retornado sem causar outros efeitos.
     */
+    printf("writing %s with %d bytes\n", buf, count);
 
      // usuário pediu pra escrever 0 bytes 😑
     if(count == 0) 
@@ -433,7 +456,7 @@ int fs_write( int fd, char *buf, int count) {
     if(inode->type == DIRECTORY)
         return -1;
 
-    int blocksNeeded = count / BLOCK_SIZE;
+    int blocksNeeded = (count / BLOCK_SIZE) + 1;
     
     int startingBlock = file_table[fd]->seek_ptr / BLOCK_SIZE;
     int startingByte =  file_table[fd]->seek_ptr % BLOCK_SIZE;
@@ -445,18 +468,18 @@ int fs_write( int fd, char *buf, int count) {
     if(lastBlock >= 23)
         return -1;
 
-    int writtenByteCounter = 0;
+    int writtenByteCounter = file_table[fd]->seek_ptr;
     for(int i = startingBlock; i < lastBlock; i++)
     {
         int blockIndex;
-         char* aux;
+        char* aux = (char*) malloc(BLOCK_SIZE);
 
         // verifica se bloco ainda não foi alocado
         if(startingBlock >= file_table[fd]->inode->numBlocks)
         {
             int unusedBlockIndex = find_unused_block();
             mark_block_as_occupied(unusedBlockIndex);
-            char intToCharArray[4] = &unusedBlockIndex;
+            char* intToCharArray = &unusedBlockIndex;
         
             for(int j = 0; j < 4 ; j++)
                 inode->data[(i*4) + j] = intToCharArray[j];
@@ -464,13 +487,15 @@ int fs_write( int fd, char *buf, int count) {
         }
         
         //transforma char[4] pra int
-        memcpy(&blockIndex, inode->data[i * 4], sizeof(int));
+        memcpy(&blockIndex, &inode->data[i * 4], sizeof(int));
         block_read(blockIndex, aux);
         
         int currentBlockCounter = 0;
         while(writtenByteCounter < count && currentBlockCounter < BLOCK_SIZE)
         {
-            aux[currentBlockCounter++] = buf[writtenByteCounter++];
+            printf("reading from pos %d from pos %d\n",currentBlockCounter, startingByte);
+            aux[currentBlockCounter++] = buf[startingByte++];
+            writtenByteCounter++;
         }
         block_write(blockIndex, aux);
     }
@@ -484,14 +509,14 @@ int fs_write( int fd, char *buf, int count) {
         inode->size = file_table[fd]->seek_ptr;
 
         // precisamos verificar se esses novos dados ocuparam blocos novos
-        inode_t* inode = file_table[fd]->inode;
         int previouslyAllocatedSpace = inode->numBlocks * BLOCK_SIZE;
 
         // se nova quantidade de dados é maior que espaço alocado anteriormente
         if(file_table[fd]->seek_ptr > previouslyAllocatedSpace)
         {
             inode->numBlocks = inode->size/BLOCK_SIZE;
-        } 
+        }
+        save_inode(inode, inode->inodeNo);
     }
     
     return 0;
@@ -515,17 +540,10 @@ int fs_lseek( int fd, int offset) {
 }
 
 int fs_mkdir( char *fileName) {
-    /**
-    *   TODO: int fs mkdir(char *dirname);
-    *   Descrição da função: fs mkdir() tenta criar um diretório chamado dirname. Retorna zero em caso de
-    *   sucesso ou -1 se ocorreu um erro. fs mkdir() deve falhar se o diretório dirname já existir.
-    *   Novos diretórios devem conter entradas “.” e “..”. E um erro tentar criar um diretório sem eles.
-    */
-
     inode_t* inode = retrieve_inode(PWD);
     int unusedBlockIndex = find_unused_block();
     int lastUsedIndex = inode->size;
-    int fileNameSize = strlen(fileName);
+    int fileNameSize = strlen(fileName) + 1;
 
     // fileName[fileNameIndex]
     int fileNameIndex = 0;
@@ -541,7 +559,7 @@ int fs_mkdir( char *fileName) {
     if(newNode == NULL)
         return -1;
 
-    newNode->type = FILE_TYPE;
+    newNode->type = DIRECTORY;
     newNode->links = 1;
     newNode->size = 0;
     newNode->numBlocks = 0;
@@ -549,7 +567,7 @@ int fs_mkdir( char *fileName) {
     newNode->dotdot = inode->inodeNo;
 
     //convert newNode->inodeNo to char[4] and insert into inode->data[]
-    char intToCharArray[4] = &newNode->inodeNo;
+    char* intToCharArray = &newNode->inodeNo;
     int charArrIndex = 0 ;
         
     lastUsedIndex = lastUsedIndex + fileNameSize;
@@ -558,17 +576,15 @@ int fs_mkdir( char *fileName) {
 
     inode->numBlocks++;
     inode->size += fileNameSize + 4;
+
+    save_inode(newNode, newNode->inodeNo);
+    save_inode(inode, inode->inodeNo);
     mark_block_as_occupied(unusedBlockIndex);
     
     return 0;
 }
 
 int fs_rmdir( char *fileName) {
-    /**
-    *   TODO: int fs rmdir(char *dirname);
-    *   Descrição da função: fs rmdir() exclui um diretório que deve estar vazio. Em caso de sucesso, zero é
-    *   retornado; em caso de erro, -1 é retornado (por exemplo, tentando excluir um diretório não vazio).
-    */
     inode_t* inode = search_filename(fileName);
 
     // tentando deletar um diretório que não existe??
@@ -593,11 +609,6 @@ int fs_rmdir( char *fileName) {
 }
 
 int fs_cd( char *dirName) {
-    /**
-    *   TODO: int fs_cd(char *dirname);
-    *   Descrição da função: fs_cd() altera o diretório atual para o especificado em dirname. Em caso de
-    *   sucesso, zero é retornado. Em caso de erro, -1 é retornado.
-    */
     inode_t* inode = search_filename(dirName);
     if(inode == NULL)
         return -1;
@@ -611,20 +622,60 @@ int fs_cd( char *dirName) {
 
 int 
 fs_link( char *old_fileName, char *new_fileName) {
-    /**
-    *   TODO: int fs link(char *oldpath, char *newpath);
-    *   Descrição da função: fs link() cria um novo link (também conhecido como link físico) para um
-    *   arquivo existente com o nome oldpath. Se já existir um newpath, ele não será substituído. O novo nome
-    *   pode ser usado exatamente como o antigo para qualquer operação; os dois nomes se referem ao mesmo
-    *   arquivo e é impossível dizer qual nome era o “original”.
-    *   Em caso de sucesso, zero é retornado. Em caso de erro, -1 é retornado. E um erro usar esta função em ´
-    *   um diretório.
-    *   Observe que, como não existem “caminhos” além do diretório atual, o pai ou o diretório filho, oldpath
-    *   e newpath são na verdade ambos nomes de arquivos e só podem estar no mesmo diretório
-    */
-
     inode_t* linkedInode = search_filename(old_fileName);
-    return -1;
+    // não encontrou inode com o nome antigo
+    if(linkedInode == NULL)
+        return -1;
+    else if(linkedInode->type == DIRECTORY)
+        return -1;
+    inode_t* linkedInodeNew = search_filename(new_fileName);
+    // link com mesmo "novo nome" já existe
+    if(linkedInodeNew != NULL)
+        return -1;
+    
+    inode_t* inode = retrieve_inode(PWD);
+    int numBlocks = inode->numBlocks;
+    int dataIndex = inode->size;
+
+    /*
+        Leandro, vc eh burro - assinado: Leandro
+        esse laço inteiro poderia ser resolvido com UMA, repito.. UMA LINHA
+        ----------------> int dataIndex = inode->size; <-----------------
+
+    // iteramos por referencias de inodes
+    while(foundBlocks < numBlocks && dataIndex < 105)
+    {
+        // '\0' indica o fim de uma string, os proximos 4 bytes é um número identificando o inode.
+        if(inode->data[dataIndex++] == '\0')
+        {
+            dataIndex += 4;
+            foundBlocks++;
+        }
+    }*/
+
+    int newFileSize = strlen(new_fileName) + 1;
+
+    // verificamos se podemos inserir de modo que caiba no inode.
+    if(dataIndex + newFileSize + 3 < 105)
+    {
+        for(int i = 0; i < newFileSize; i++)
+            inode->data[dataIndex++] = new_fileName[i];
+        
+        char* intToCharArr = &linkedInode->inodeNo;
+
+        for(int i = 0; i < 4; i++)
+            inode->data[dataIndex++] = intToCharArr[i];
+        
+
+        linkedInode->links++;
+        inode->numBlocks++;
+        inode->size = dataIndex;
+        save_inode(linkedInode, linkedInode->inodeNo);
+        save_inode(inode, inode->inodeNo);
+        return 0;
+    }
+    else return -1;
+    
 }
 
 
@@ -663,7 +714,7 @@ int fs_unlink(int inodeNo) {
             blocksFound++;
             int index;
             // constroi int a partir do char[4]
-            memcpy(&index, inode->data[i+1], sizeof(int));
+            memcpy(&index, &inode->data[i+1], sizeof(int));
             i += 4;
             // se o proximo ponteiro não for correspondente ao numero do arquivo a ser excluido
             if(index != inodeNo)
@@ -679,10 +730,10 @@ int fs_unlink(int inodeNo) {
     }
 
     inode->numBlocks = newNumBlocks;
+    inode->size = newDataIndex;
     memcpy(inode->data, newData, 105);
     // salva mudanças do diretório pai no disco
-    block_write(inode->inodeNo + 1, inode);
-
+    save_inode(inode, inode->inodeNo);
 
     // se o usuário estiver com o arquivo aberto
     // não podemos deletar o arquivo de fato ainda
@@ -691,7 +742,7 @@ int fs_unlink(int inodeNo) {
     {
         inode_t* deletedInode = retrieve_inode(inodeNo);
         deletedInode->type = FREE_INODE;
-        block_write(inodeNo + 1, deletedInode);
+        save_inode(deletedInode, deletedInode->inodeNo);
     }
     else
     {
@@ -716,5 +767,15 @@ int fs_stat( char *fileName, fileStat *buf) {
      * Nota: se sua implementação precisar de membros diferentes, você poderá modificar essa estrutura, 
      * mas adicione-a apenas e atualize os membros que já estão lá. 
      */
-    return -1;
+    inode_t* inode = search_filename(fileName);
+    if(inode == NULL)
+        return -1;
+    //printf("inode no == %d\n", inode->inodeNo);
+    buf->inodeNo = inode->inodeNo;
+    buf->type = inode->type;
+    buf->links = inode->links;
+    buf->size = inode->size;
+    buf->numBlocks = inode->numBlocks;
+
+    return 0;
 }

@@ -20,9 +20,8 @@ int fs_unlink( int inodeNo);
 int fs_stat( char *fileName, fileStat *buf);
 
 
-#define MAGIC_NUMBER 4242424242424242
+#define MAGIC_NUMBER 42
 
-superblock_t* superblock;
 int PWD;
 
 typedef struct superblock
@@ -33,6 +32,7 @@ typedef struct superblock
     long long data_begin;// Onde começam os blocos de dados?
     long long magic_number;// Número mágico 😎 
 }superblock_t;
+superblock_t* superblock;
 
 typedef struct inode
 {
@@ -43,18 +43,21 @@ typedef struct inode
     int numBlocks; // 4 bytes -- número de blocos usados pelo arquivo
     int dot; // 4 bytes
     int dotdot; // 4 bytes
-    char data[105]; // if(type == DIRECTORY) 
-} inode_t;
+    char data[105]; //
+} __attribute__ ((packed)) inode_t;
 
 typedef struct file_descriptor // TODO: Se der merda, temos um possível culpado
 {
     inode_t* inode;
     int seek_ptr;
+    int hasNoLinks;
 } fd_t;
 
 fd_t* file_table[2044];
 
 // assinaturas de funções criadas por nós
+inode_t* create_inode(int number);
+inode_t* retrieve_inode(int index);
 int find_unused_block();
 void mark_block_as_occupied(int block);
 inode_t* find_empty_inode();

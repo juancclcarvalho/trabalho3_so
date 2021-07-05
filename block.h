@@ -1,6 +1,6 @@
 #ifndef BLOCK_INCLUDED
 #define BLOCK_INCLUDED
-
+#include<stdlib.h>
 #define MAX_IMAGE_SIZE 256*1024
 //#define MAX_IMAGE_SIZE 128*1024
 
