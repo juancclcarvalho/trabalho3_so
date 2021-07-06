@@ -247,8 +247,35 @@ static void shell_cd( void) {
 }
 
 static void shell_ls( void) {
-	//should a system call print to the screen?
-	writeStr("Problem with ls\n");
+	int fileQuantity = 0;
+	char** nameMatrix;
+	fileStat* output = fs_ls(&fileQuantity, &nameMatrix);
+
+	writeStr("Name"); //  writeStr("Name");
+	for(int j = 0; j < MAX_FILE_NAME -3; j++) // print MAX_FILE_NAME - 3 spaces
+		writeStr(" ");
+	writeStr("Type Inode Size\n");
+	for(int i = 0; i < fileQuantity; i++)
+	{
+		fileStat* current = &output[i];
+
+		writeStr(nameMatrix[i]);
+
+		for(int j = 0; j < MAX_FILE_NAME +1 - strlen(nameMatrix[i]); j++) // print MAX_FILE_NAME - 3 spaces
+			writeStr(" ");
+		writeStr(current->type == DIRECTORY ? "D" : "F");
+		writeStr("     ");
+
+		char* integerToString = (char*) malloc(MAX_FILE_NAME);
+
+		itoa(current->inodeNo, integerToString);
+		writeStr(integerToString);
+		writeStr("      ");
+
+		itoa(current->size, integerToString);
+		writeStr(integerToString);
+		writeStr("\n");
+	}
 	
 //Code/pseudocode you can use somewhere to get the same ls output as the tests
 //  writeStr("Name");

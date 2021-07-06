@@ -90,7 +90,6 @@ int fs_mkfs(void)
         memcpy(&aux[sizeof(inode_t) * 3], inode[3], sizeof(inode_t));
         // salvamos o bloco
         block_write(i,aux);
-        
     }
 
     // aloca mapa de alocação (bitmasks de blocos de dados)
@@ -141,11 +140,11 @@ inode_t* search_filename(char *fileName)
 
                 // strings diferentes, fileName tem tamanho maior
                 // -----------> NUNCA vai entrar no condicional de quando fileName terminar em '\0'.
-                // -----------> o condicional if(inode->data[dataIndex] == '\0') vai ser ativado
+                // -----------> o condicional if(inode->data[dataIndex] == '\0') dentro do else vai ser ativado
                 // -----------> damos break e tentamos novamente com a proxima string, se tiver
                 
                 // strings diferentes, fileName tem tamanho menor
-                // -----------> eh possivel entrar no condicional de quando fileName terminar em '\0'. (um e substring do outro)
+                // -----------> eh possivel entrar no condicional de quando fileName terminar em '\0'. (um eh substring do outro)
                 // -----------> vai verificar que inode->data não terminou e setar a flag como falsa.
                 // -----------> em todos os laços subsequentes, o primeiro condicional vai pro else até acabar a string em inode->data,
                 // -----------> damos break e tentamos novamente com a proxima string, se tiver
@@ -159,7 +158,7 @@ inode_t* search_filename(char *fileName)
                 {
                     // condicional interno evita falsamente avaliar o exemplo abaixo como verdadeiro
                     // filename =  "abc"
-                    // inode->data "abcd"
+                    // inode->data = "abcd"
                     if(inode->data[dataIndex] == '\0') // encontrou a string correta
                     {
                         // deu bom
@@ -192,7 +191,7 @@ inode_t* search_filename(char *fileName)
     }
     else
     {
-        printf("NOT A DIRECTORY, SOMEHOW\n");
+        //printf("NOT A DIRECTORY, SOMEHOW\n"); print de debug
         // função precisa buscar o arquivo dentro de um diretório.
         // idealmente PWD nunca apontará para um arquivo... eu sou burro
         return NULL;
@@ -201,7 +200,7 @@ inode_t* search_filename(char *fileName)
 
 inode_t* find_empty_inode() // SOLUÇÃO O(N) bem ruim mas dá pro gasto
 {
-
+    // procura todos os inodes sequencialmente até achar um livre
     for(int i = 1; i <= INODE_BLOCKS * 4; i++)
     {
         inode_t* inode = retrieve_inode(i);
@@ -211,36 +210,6 @@ inode_t* find_empty_inode() // SOLUÇÃO O(N) bem ruim mas dá pro gasto
 
     return NULL;
 }
-
-/*
-    TODO: int fs open(char *filename, int flags);
-    Dado um nome de arquivo (filename), fs open() 
-    retorna um descritor de arquivo, um numero inteiro pequeno e nao negativo para uso em chamadas de sistema subsequentes 
-    (fs read,fs write, fs lseek, etc.).
-    
-    O descritor de arquivo retornado por uma chamada bem-sucedida sera o descritor
-    de arquivo com o numero mais baixo que nao esta aberto no momento.
-
-    O parametro flags deve incluir um dos seguintes modos de acesso: 
-    ------>FS O RDONLY, 
-    ------>FS O WRONLY,
-    ------>FS O RDWR.
-
-    Eles solicitam a abertura do arquivo somente leitura, somente gravacao ou leitura/gravacao, respectivamente.
-    As constantes sao definidas no arquivo common.h.
-    Abrir um arquivo retorna um novo descritor de arquivo ou -1 se ocorreu um erro.
-    Se um arquivo inexistente for aberto para gravação, ele devera ser criado. Uma tentativa de abrir um
-    arquivo inexistente somente para leitura deve falhar.
-    Para facilitar sua vida, assumimos que o nome do arquivo (filename) passado para as chamadas de
-    sistema pode ser apenas “.”, “..”, um diretório ou um nome de arquivo no diretorio atual. Portanto, voce nao
-    precisa analisar o caminho com nomes de diretorio e arquivo separados por “/”. Voce tambem pode supor
-    que o comprimento do nome do arquivo (e do nome do diretorio) seja menor que 32 bytes (MAX FILE NAME).
-    Essas suposicoes permanecem as mesmas para as funcoes seguintes.
-    E considerado um erro abrir um diretório em qualquer modo alem do  FS O RDONLY.
-    Voce pode usar uma tabela de descritor de arquivo compartilhada. Voce nao precisa se preocupar com
-    gerenciamento de usuarios ou listas de controle de acesso.
-*/
-
 
 int fs_open(char *fileName, int flags) 
 {
@@ -261,12 +230,13 @@ int fs_open(char *fileName, int flags)
         int fileNameIndex = 0;
         for(int i = lastUsedIndex; i < lastUsedIndex + fileNameSize; i++)
         {
-            // se i == 101, não vai caber
+            // se i == 101, não vai caber. sendo que o campo data de cada inode possui 105 bytes.
             if(i == 101)
                 return -1;
             
             inode->data[i] = fileName[fileNameIndex++];
         }
+        // encontramos um inode marcado como vazio para utilizar
         inode_t* newNode = find_empty_inode();
         if(newNode == NULL)
             return -1;
@@ -313,23 +283,19 @@ int fs_open(char *fileName, int flags)
 
 int fs_close( int fd) 
 {
-    /**
-    *   TODO: int fs close(int fd);
-    *   Fecha um descritor de arquivo, para que ele nao se refira mais a
-    *   nenhum arquivo e possa ser reutilizado. Retorna zero em caso de sucesso e -1 em caso de falha. Se o
-    *   descritor foi a ultima referencia a um arquivo que foi removido usando a desvinculacao (unlink)
-    *   o arquivo sera excluıdo.
-    */
     if(file_table[fd] == NULL)
         return -1;
 
+    // buscamos o inode na tabela hash de tabela de arquivos
+    // como o mapeamento é 1 pra 1, usamos como função hash, o inodeNo de um determinado inode.
     inode_t* inode = file_table[fd]->inode;
     inode->links--;
 
     // o arquivo foi deletado, liberamos a memória associada a ele
     if(file_table[fd]->hasNoLinks)
         inode->type = FREE_INODE;
-        
+    
+    // guarda inode no disco
     save_inode(inode, inode->inodeNo);
 
     free(file_table[fd]);
@@ -340,6 +306,9 @@ int fs_close( int fd)
 
 int find_unused_block()
 {
+    // essa função se responsabiliza de encontrar um bloco DE DADOS vazio
+    // buscamos isso no bitmap presente no bloco seguinte dos inodes no disco
+    // retorna o indice do bloco para quem chamou a função
     char* aux = (char*) malloc(BLOCK_SIZE);
     block_read(INODE_BLOCKS + 1, aux);
     int firstDataBlockIndex = INODE_BLOCKS + 2;
@@ -380,17 +349,6 @@ void mark_block_as_occupied(int block)
 }
     
 int fs_read( int fd, char *buf, int count) {
-    /**
-    *   TODO: int fs read(int fd, char *buf, int count);
-    *   fs read() tenta ler ate (count) bytes do descritor de arquivo fd no buffer,
-    *   indicado por buf. Se count for zero, fs read() retornara zero e nao executa nenhuma outra acao. Em
-    *   caso de sucesso, o numero de bytes lidos com exito e retornado e a posicao do arquivo e avancada por esse
-    *   numero. Nao e um erro se esse numero for menor que o numero de bytes solicitados; isso pode acontecer,
-    *   por exemplo, porque menos bytes estao disponıveis no momento. Em caso de erro, -1 e retornado. No caso
-    *   de erro, nao e necessario alterar ponteiro de deslocamento do arquivo.
-    */
-    printf("reading %d bytes\n", count);
-
     // usuário pediu pra ler 0 bytes 😑
     if(count == 0) 
         return 0;
@@ -419,7 +377,6 @@ int fs_read( int fd, char *buf, int count) {
         int currentByteCounter = 0;
         while(readByteCounter < count && currentByteCounter < BLOCK_SIZE)
         {
-            printf("reading from pos %d from pos %d == %c\n", readByteCounter, currentByteCounter, aux[currentByteCounter]);
             buf[readByteCounter++] = aux[currentByteCounter++];    
         }
     }
@@ -430,19 +387,6 @@ int fs_read( int fd, char *buf, int count) {
 }
     
 int fs_write( int fd, char *buf, int count) {
-    /**
-    *   TODO: int fs write(int fd, char *buf, int count);
-    *   Descrição da função: fs write() grava count bytes no arquivo referenciado pelo descritor de arquivo
-    *   fd do buffer indicado por buf.
-    *   Em caso de sucesso, o número de bytes gravados de buf é retornado (um número menor que count
-    *   pode ser retornado) e a posição do arquivo é avançada por esse número. Em caso de erro, -1 é retornado.
-    *   E um erro tentar gravar em um ponto além do tamanho máximo de um arquivo. ´ E um erro se a contagem ´
-    *   for maior que zero, mas nenhum byte for gravado.
-    *   Um arquivo de tamanho zero não deve ocupar nenhum bloco de dados.
-    *   Se count for zero, 0 será retornado sem causar outros efeitos.
-    */
-    printf("writing %s with %d bytes\n", buf, count);
-
      // usuário pediu pra escrever 0 bytes 😑
     if(count == 0) 
         return 0;
@@ -479,7 +423,7 @@ int fs_write( int fd, char *buf, int count) {
         {
             int unusedBlockIndex = find_unused_block();
             mark_block_as_occupied(unusedBlockIndex);
-            char* intToCharArray = &unusedBlockIndex;
+            char* intToCharArray = (char*)&unusedBlockIndex;
         
             for(int j = 0; j < 4 ; j++)
                 inode->data[(i*4) + j] = intToCharArray[j];
@@ -493,7 +437,6 @@ int fs_write( int fd, char *buf, int count) {
         int currentBlockCounter = 0;
         while(writtenByteCounter < count && currentBlockCounter < BLOCK_SIZE)
         {
-            printf("reading from pos %d from pos %d\n",currentBlockCounter, startingByte);
             aux[currentBlockCounter++] = buf[startingByte++];
             writtenByteCounter++;
         }
@@ -523,19 +466,9 @@ int fs_write( int fd, char *buf, int count) {
 }
 
 int fs_lseek( int fd, int offset) {
-    /**
-    *   TODO: int fs lseek(int fd, int offset);
-    *   Descrição da função: A função fs lseek() reposiciona o deslocamento do arquivo aberto associado ao
-    *   descritor de arquivo fd para o deslocamento (offset) do argumento.
-    *   A função fs lseek() permite que o deslocamento do arquivo seja definido além do final do arquivo
-    *   (mas isso não altera o tamanho do arquivo). Se os dados forem gravados posteriormente nesse deslocamento,
-    *   o arquivo será preenchido com ’\0’ no espaço intermediário.
-    *   Após a conclusão bem-sucedida, fs lseek() retorna o local de deslocamento resultante conforme
-    *   medido em bytes desde o início do arquivo. Caso contrário, o valor -1 será retornado.
-    */
-
     file_table[fd]->seek_ptr += offset;
     // TODO: ADICIONAR LOGICA DE PREENCHER '\0' NO ESPAÇO INTERMEDIARIO
+    // não deu tempo professor :(, desculpa
     return 0;
 }
 
@@ -751,7 +684,7 @@ int fs_unlink(int inodeNo) {
     return 0;
 }
 
-int fs_stat( char *fileName, fileStat *buf) {
+int fs_stat(char *fileName, fileStat *buf) {
     /**
      * TODO: int fsstat(char *filename, fileStat *buf);
      * Descrição da função: fsstat() retorna informações sobre um arquivo.  
@@ -778,4 +711,41 @@ int fs_stat( char *fileName, fileStat *buf) {
     buf->numBlocks = inode->numBlocks;
 
     return 0;
+}
+
+fileStat* fs_ls(int* fileQuantity, char*** nameMatrix)
+{    
+    inode_t* inode = retrieve_inode(PWD);
+    *fileQuantity = inode->numBlocks; 
+
+    fileStat* output = (fileStat*) malloc(sizeof(fileStat) *  inode->numBlocks);
+    *nameMatrix = (char**)malloc(sizeof(char**) * inode->numBlocks );
+
+    int filesFound = 0;
+    int startingIndex = 0;
+    int dataIndex = 0;
+    while(filesFound < *fileQuantity)
+    {
+        if(inode->data[dataIndex++] == '\0')
+        {
+            (*nameMatrix)[filesFound] = (char*)malloc(dataIndex - startingIndex); 
+            char* fileName = (*nameMatrix)[filesFound];
+            int fileNameIndex = 0;
+
+            for(int i = startingIndex; i < dataIndex; i++)
+                fileName[fileNameIndex++] = inode->data[i];
+            inode_t* foundInode = search_filename(fileName);
+
+            output[filesFound].inodeNo = foundInode->inodeNo;
+            output[filesFound].type = foundInode->type;
+            output[filesFound].links = foundInode->links;
+            output[filesFound].size = foundInode->size;
+            output[filesFound].numBlocks = foundInode->numBlocks;
+
+            startingIndex = dataIndex + 4;
+            dataIndex = startingIndex;
+            filesFound++;
+        }
+    }
+    return output;
 }

@@ -43,7 +43,7 @@ typedef struct inode
     int numBlocks; // 4 bytes -- número de blocos usados pelo arquivo
     int dot; // 4 bytes
     int dotdot; // 4 bytes
-    char data[105]; //
+    char data[105]; // 105 bytes
 } __attribute__ ((packed)) inode_t;
 
 typedef struct file_descriptor // TODO: Se der merda, temos um possível culpado
@@ -58,9 +58,11 @@ fd_t* file_table[2044];
 // assinaturas de funções criadas por nós
 inode_t* create_inode(int number);
 inode_t* retrieve_inode(int index);
+inode_t* search_filename(char *fileName);
 int find_unused_block();
 void mark_block_as_occupied(int block);
 inode_t* find_empty_inode();
+fileStat* fs_ls(int* fileQuantity, char*** nameMatrix);
 
 #define MAX_FILE_NAME 32
 #define MAX_PATH_NAME 256  // This is the maximum supported "full" path len, eg: /foo/bar/test.txt, rather than the maximum individual filename len.
