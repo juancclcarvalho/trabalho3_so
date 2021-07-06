@@ -533,21 +533,23 @@ int fs_rmdir( char *fileName) {
         return -1;
     
     inode->type = FREE_INODE;
-    /**
-    *   TODO: ATUALIZAR INODE APONTADO POR PWD (precisa tirar o campo que apontava pro diretorio excluido)
-    *       No caso é só chamar unlink?????                     - sim.
-    */
+
     fs_unlink(inode->inodeNo);
     return 0;
 }
 
 int fs_cd( char *dirName) {
+    // buscamos pelo inode do diretório especificado pelo usuário
     inode_t* inode = search_filename(dirName);
+
+    // esse diretório não existe, ou não está na pasta apontada por PWD
     if(inode == NULL)
         return -1;
+    // não é um diretório
     if(inode->type == FILE_TYPE)    
         return -1;
     
+    // atualizamos PWD com o diretório requisitado
     PWD = inode->inodeNo;
     return 0;
 }
@@ -613,16 +615,6 @@ fs_link( char *old_fileName, char *new_fileName) {
 
 
 int fs_unlink(int inodeNo) {
-    /**
-    *   TODO: int fs unlink(int inodeNo);
-    *   Descrição da função: fs unlink() exclui um nome do sistema de arquivos. Se esse nome foi o último
-    *   link para um arquivo e nenhum processo o abriu, o arquivo será excluído e o espaço usado estará disponível
-    *   para reutilização.
-    *   Se o nome for o último link para um arquivo, mas ele ainda estiver aberto em um descritor de arquivo
-    *   existente, ele permanecerá até que o último descritor de arquivo referente a ele seja fechado.
-    *   Em caso de sucesso, zero é retornado. Em caso de erro, -1 é retornado. E um erro usar esta função em ´
-    *   um diretório.
-    */
     inode_t* inode = retrieve_inode(PWD);
      
     char newData[105];
@@ -685,21 +677,6 @@ int fs_unlink(int inodeNo) {
 }
 
 int fs_stat(char *fileName, fileStat *buf) {
-    /**
-     * TODO: int fsstat(char *filename, fileStat *buf);
-     * Descrição da função: fsstat() retorna informações sobre um arquivo.  
-     * Ela retorna uma estrutura fileStat(definida emcommon.h), que contém os seguintes campos:
-     * typedef struct{
-     *  int inodeNo; // número do i-node do arquivo
-     *  short type;  // tipo do i-node doarquivo: DIRECTORY, FILE_TYPE (há outro valor FREE_INODE que nunca aparece aqui
-     *  char links;  // número de links para o i-node
-     *  int size;    // tamanho do arquivo em byte
-     *  int numBlocks; // número de blocos usados pelo arquivo
-     * } fileStat;
-     * Não reutilize essa estrutura para seus inodes.
-     * Nota: se sua implementação precisar de membros diferentes, você poderá modificar essa estrutura, 
-     * mas adicione-a apenas e atualize os membros que já estão lá. 
-     */
     inode_t* inode = search_filename(fileName);
     if(inode == NULL)
         return -1;
@@ -715,10 +692,14 @@ int fs_stat(char *fileName, fileStat *buf) {
 
 fileStat* fs_ls(int* fileQuantity, char*** nameMatrix)
 {    
+    // buscamos o inode do diretório atual
     inode_t* inode = retrieve_inode(PWD);
+    // informamos a shell quantos arquivos tem na pasta
     *fileQuantity = inode->numBlocks; 
 
+    // alocamos espaço suficiente para o fileStat de todos os arquivos
     fileStat* output = (fileStat*) malloc(sizeof(fileStat) *  inode->numBlocks);
+    // alocamos espaço suficiente para cada LINHA da matriz de nomes correspondente a um arquivo/diretório
     *nameMatrix = (char**)malloc(sizeof(char**) * inode->numBlocks );
 
     int filesFound = 0;
@@ -726,6 +707,7 @@ fileStat* fs_ls(int* fileQuantity, char*** nameMatrix)
     int dataIndex = 0;
     while(filesFound < *fileQuantity)
     {
+        // '\0' indica que acabou a string identificadora de um arquivo/diretório no inode
         if(inode->data[dataIndex++] == '\0')
         {
             (*nameMatrix)[filesFound] = (char*)malloc(dataIndex - startingIndex); 

@@ -44,6 +44,16 @@ typedef struct inode
     int dot; // 4 bytes
     int dotdot; // 4 bytes
     char data[105]; // 105 bytes
+    /**
+    *   Quando um inode for do tipo de diretorio, ele sempre vai ser organizado de mood que:
+    *   para cada arquivo/diretório associado a ele seguimos a mesma estrutura
+    *   preenchemos o nome primeiro (string)
+    *   inserimos o '\0' para identificar o tamanho da string
+    *   e inserimos um inteiro de 4 bytes para identificar o inode referenciado
+    *
+    *   Quando o inode for do tipo FILE_TYPE, não precisamos mais de uma string identificadora 
+    *   e o campo data é preenchido inteiramente com inteiros para identificar um bloco.
+    */
 } __attribute__ ((packed)) inode_t;
 
 typedef struct file_descriptor // TODO: Se der merda, temos um possível culpado
